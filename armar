@@ -1,0 +1,264 @@
+/*
+ * This file is part of ArmarX.
+ *
+ * ArmarX is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * ArmarX is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * @package    Versuch9::Armar3MotionControl
+ * @author     [Author Name] ( [Author Email] )
+ * @date       2018
+ * @copyright  http://www.gnu.org/licenses/gpl-2.0.txt
+ *             GNU General Public License
+ */
+
+#include "CircleMotion.h"
+
+#include <ArmarXCore/core/time/TimeUtil.h>
+//#include <ArmarXCore/observers/variant/DatafieldRef.h>
+#include <VirtualRobot/Robot.h>
+#include <RobotAPI/libraries/core/CartesianVelocityController.h>
+#include <VirtualRobot/math/AbstractFunctionR1R3.h>
+#include <VirtualRobot/math/SimpleAbstractFunctionR1R3.h>
+#include <RobotAPI/interface/units/KinematicUnitInterface.h>
+float pi=3.1416;
+
+using namespace armarx;
+using namespace Armar3MotionControl;
+using namespace math;
+
+// DO NOT EDIT NEXT LINE
+CircleMotion::SubClassRegistry CircleMotion::Registry(CircleMotion::GetName(), &CircleMotion::CreateInstance);
+
+class MyLine : public AbstractFunctionR1R3
+{
+public:
+    Eigen::Vector3f p1;
+    Eigen::Vector3f p2;
+    float duration;
+
+    Eigen::Vector3f Get(float t) override
+    {
+        float f = fmod(t / duration, 1.f);
+        return p1 * (1 - f) + p2 * f;
+    }
+
+    virtual Eigen::Vector3f GetDerivative(float t) override
+    {
+        return Eigen::Vector3f::Zero(); // TODO
+    }
+};
+
+class Circle : public AbstractFunctionR1R3
+{
+public:
+    // TODO: add members!
+
+    Eigen::Vector3f Center;	// center of the circle
+    Eigen::Vector3f init_location;
+    Eigen::Vector3f circle;
+
+    Eigen::Vector3f Get(float t) override
+    {
+        float f = fmod(t / 10.f, 1.f);			// percentage of the motion
+        circle(0)=100*cos(2.f*pi*f)+Center(0);	// x coordinate
+        circle(1)=Center(1);					// y coordinate
+        circle(2)=100*sin(2.f*pi*f)+Center(2);	// z coordinate
+        return circle + init_location;
+    }
+
+
+    Eigen::Vector3f Get(float t) override
+    {
+        return Eigen::Vector3f::Zero(); // TODO
+    }
+
+    virtual Eigen::Vector3f GetDerivative(float t) override
+    {
+        return Eigen::Vector3f::Zero(); // TODO
+    }
+};
+
+// TODO: add MyFigureEight class
+class MyFigureEight : public AbstractFunctionR1R3
+{
+public:
+    // TODO: add members!
+
+    Eigen::Vector3f init_location;
+    Eigen::Vector3f FigureEight;
+
+    Eigen::Vector3f Get(float t) override
+    {
+        float f = fmod(t / 10.f, 1.f);			// percentage of the motion
+        if ( f < 0.5 )
+            FigureEight(0) = f ;
+            FigureEight(1) = 0 ;
+            FigureEight(2) = 100*cos(2*pi*0.1*f);
+        else
+            FigureEight(0) = 1- f ;
+            FigureEight(1) = 0 ;
+            FigureEight(2) = 100*sin(2*pi*0.1*f + pi/4);
+        return FigureEight + init_location;
+    }
+
+
+    Eigen::Vector3f Get(float t) override
+    {
+        return Eigen::Vector3f::Zero(); // TODO
+    }
+
+    virtual Eigen::Vector3f GetDerivative(float t) override
+    {
+        return Eigen::Vector3f::Zero(); // TODO
+    }
+};
+
+typedef boost::shared_ptr<MyLine> MyLinePtr;
+typedef boost::shared_ptr<Circle> CirclePtr;
+// TODO: add typedefs
+typedef boost::shared_ptr<FigureEight> FigureEightPtr;
+
+void testDerivativeNumerically(const AbstractFunctionR1R3& motion)
+{
+    // Hint: f'(t) ~= (f(t+dt) - f(t)) / dt, for small dt
+    // TODO implement loop that checks GetDerivative for many t!
+}
+
+
+void CircleMotion::onEnter()
+{
+    // nothing to do here.
+}
+
+std::map<std::string, float> makeJointValueMap(VirtualRobot::RobotNodeSetPtr rns, Eigen::VectorXf jv)
+{
+    std::map<std::string, float> jvMap;
+    size_t i = 0;
+    for (std::string name : rns->getNodeNames())
+    {
+        jvMap[name] = jv(i);
+        i++;
+    }
+    return jvMap;
+}
+
+std::map<std::string, ControlMode> makeControlModeMap(VirtualRobot::RobotNodeSetPtr rns, ControlMode mode)
+{
+    std::map<std::string, ControlMode> controlModes;
+    for (std::string name : rns->getNodeNames())
+    {
+        controlModes[name] = mode;
+    }
+    return controlModes;
+}
+
+
+void CircleMotion::run()
+{
+    VirtualRobot::RobotPtr robot = RemoteRobot::createLocalCloneFromFile(getRobotStateComponent());
+    VirtualRobot::RobotNodeSetPtr rns = robot->getRobotNodeSet(in.getKinematicChainName());
+    VirtualRobot::RobotNodePtr tcp = rns->getTCP();
+    KinematicUnitInterfacePrx kinUnit = getKinematicUnit();
+
+    Eigen::Matrix4f centerPose = in.getCenter()->toEigen();
+    Eigen::Vector3f centerPosition = centerPose.block<3, 1>(0, 3);
+
+    // TODO: add Kpd
+
+    AbstractFunctionR1R3Ptr motion;
+
+    ARMARX_IMPORTANT << "Selected motion type: " << in.getMotionType();
+
+    if (in.getMotionType() == "Line")
+    {
+        MyLinePtr line(new MyLine());
+        line->p1 = centerPosition;
+        line->p2 = line->p1 + Eigen::Vector3f(in.getRadius(), 0, 0);
+        line->duration = in.getPeriod();
+        motion = line;
+    }
+    else if (in.getMotionType() == "Circle")
+    {
+        CirclePtr circle(new Circle());
+        // TODO: set circle members!
+        motion = circle;
+    }
+    // TODO: add other cases! (Figure 8, Bezier)
+    else
+    {
+        throw LocalException("Unknown MotionType '") << in.getMotionType() << "'";
+    }
+
+
+    // Bewegung zur Startkonfiguration
+    // TODO switch to position control
+    // setJointAngles(StartConfiguration)
+    // sleep(2)
+    // Hint: use makeControlModeMap
+    // Hint: use in.getStartConfiguration()
+
+
+    kinUnit->switchControlMode(makeControlModeMap(rns, eVelocityControl));
+
+    CartesianVelocityController controller(rns);
+    IceUtil::Time start = TimeUtil::GetTime();
+    while (!isRunningTaskStopped()) // stop run function if returning true
+    {
+        RemoteRobot::synchronizeLocalClone(robot, getRobotStateComponent());
+        IceUtil::Time now = TimeUtil::GetTime();
+        float t = (now - start).toSecondsDouble();
+        Eigen::Vector3f currentPosition = tcp->getPositionInRootFrame();
+
+
+        Eigen::Vector3f targetPos = motion->Get(t);
+
+
+        // TODO: implement controller here!
+        Eigen::Vector3f error = Eigen::Vector3f::Zero(); // TODO
+        Eigen::Vector3f velocity = Eigen::Vector3f::Zero();  // TODO
+
+        // solve differential inverse kinematics
+        Eigen::VectorXf jv = controller.calculate(velocity, Eigen::VectorXf::Zero(rns->getSize()), VirtualRobot::IKSolver::CartesianSelection::Position);
+
+        // debug output for plotting
+        getDebugObserver()->setDebugDatafield("CircleMotion", "error_x", new Variant(error(0)));
+        getDebugObserver()->setDebugDatafield("CircleMotion", "error_y", new Variant(error(1)));
+        getDebugObserver()->setDebugDatafield("CircleMotion", "error_z", new Variant(error(2)));
+
+        kinUnit->setJointVelocities(makeJointValueMap(rns, jv)); // set velocities
+
+        usleep(10000); // sleep 10ms
+
+    }
+
+    kinUnit->setJointVelocities(makeJointValueMap(rns, Eigen::VectorXf::Zero(rns->getSize()))); // stop robot
+}
+
+//void CircleMotion::onBreak()
+//{
+//    // put your user code for the breaking point here
+//    // execution time should be short (<100ms)
+//}
+
+void CircleMotion::onExit()
+{
+    // put your user code for the exit point here
+    // execution time should be short (<100ms)
+}
+
+
+// DO NOT EDIT NEXT FUNCTION
+XMLStateFactoryBasePtr CircleMotion::CreateInstance(XMLStateConstructorParams stateData)
+{
+    return XMLStateFactoryBasePtr(new CircleMotion(stateData));
+}
+
